@@ -1,0 +1,124 @@
+# ============================
+# PhotoShare - Git Ignore
+# ============================
+
+# --- OS generated files ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+*.crt
+
+# --- Logs & Debug ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# --- Dependencies ---
+node_modules/
+.pnp/
+.pnp.js
+vendor/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# --- Build & Output ---
+dist/
+build/
+out/
+*.exe
+*.dll
+*.dylib
+*.so
+*.class
+*.jar
+target/
+
+# --- Package managers / lockfiles (uncomment if desired) ---
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+# Gemfile.lock
+# poetry.lock
+
+# --- Caches ---
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+*.tsbuildinfo
+
+# --- Testing & Coverage ---
+coverage/
+.nyc_output/
+*.lcov
+htmlcov/
+
+# --- Misc ---
+*.bak
+*.tmp
+*.swp
+*.orig
+*.patch
+*.diff
+
+# --- PhotoShare specific (adjust as needed) ---
+uploads/
+media/
+public/uploads/
+static/uploads/
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+!docs/images/
+!assets/
+
+# Add language/framework specific ignores below as the project evolves
