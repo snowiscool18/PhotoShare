@@ -10,11 +10,11 @@ import Image from "next/image";
 // Real family photo now included in /public/images/
 // ============================================
 
-interface Photo {
+interface Post {
   id: string;
-  name: string;
-  dataUrl: string; // base64 encoded image
-  uploadedAt: string;
+  imageDataUrl: string;
+  description: string;
+  createdAt: string;
 }
 
 interface User {
@@ -22,7 +22,7 @@ interface User {
   name: string;
   email: string;
   createdAt: string;
-  photos?: Photo[];
+  posts?: Post[];
 }
 
 // The user's actual family photo (added to the project)
@@ -41,7 +41,11 @@ export default function PhotoSharePrototype() {
     if (typeof window === "undefined") return null;
     try {
       const saved = localStorage.getItem("photoshare_demo_user");
-      return saved ? JSON.parse(saved) : null;
+      if (!saved) return null;
+      const parsed: User = JSON.parse(saved);
+      // Migrate old photo data to new post format
+      // eslint-disable-next-line react-hooks/purity
+      return migrateOldPhotosToPosts(parsed);
     } catch {
       return null;
     }
@@ -58,15 +62,26 @@ export default function PhotoSharePrototype() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  // Photo upload state
+  // Photo upload / Post creation state
   const [isUploading, setIsUploading] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [postDescription, setPostDescription] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Persist user whenever it changes
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem("photoshare_demo_user", JSON.stringify(currentUser));
+    }
+  }, [currentUser]);
+
+  // One-time migration for users who had the old photos format
+  useEffect(() => {
+    if (currentUser && (currentUser as any).photos && !currentUser.posts) {
+      const migrated = migrateOldPhotosToPosts(currentUser);
+      setCurrentUser(migrated);
     }
   }, [currentUser]);
 
@@ -146,10 +161,10 @@ export default function PhotoSharePrototype() {
   };
 
   // ============================================
-  // Photo Upload Feature (Prototype - Client Side)
+  // Timeline Posts Feature (Instagram/Facebook style)
   // ============================================
 
-  const MAX_PHOTOS = 8;
+  const MAX_POSTS = 10;
 
   const convertFileToDataUrl = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -160,112 +175,115 @@ export default function PhotoSharePrototype() {
     });
   };
 
-  const addPhotosFromFiles = async (files: FileList | File[]) => {
-    if (!currentUser) return;
+  // Open the upload modal
+  const openUploadModal = () => {
+    setPostDescription("");
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    setIsUploadModalOpen(true);
+  };
 
-    const fileArray = Array.from(files);
-    const imageFiles = fileArray.filter((file) =>
-      file.type.startsWith("image/")
-    );
+  const closeUploadModal = () => {
+    setIsUploadModalOpen(false);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+    setPostDescription("");
+  };
 
-    if (imageFiles.length === 0) {
-      showToast("Please select image files (JPG, PNG, etc.)");
+  // Handle file selection inside the modal
+  const handleFileSelectForModal = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      showToast("Please select an image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      showToast("Image is too large (max 5MB for this demo)");
       return;
     }
 
-    const currentPhotos = currentUser.photos || [];
-    if (currentPhotos.length + imageFiles.length > MAX_PHOTOS) {
-      showToast(`You can upload up to ${MAX_PHOTOS} photos in this prototype`);
+    setSelectedFile(file);
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setPreviewUrl(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Create a new post with photo + description
+  const handleCreatePost = async () => {
+    if (!currentUser || !selectedFile || !previewUrl) return;
+
+    const currentPosts = currentUser.posts || [];
+    if (currentPosts.length >= MAX_POSTS) {
+      showToast(`You've reached the limit of ${MAX_POSTS} posts in this prototype`);
       return;
     }
 
     setIsUploading(true);
 
     try {
-      const newPhotos: Photo[] = [];
+      const newPost: Post = {
+        id: "post_" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)),
+        imageDataUrl: previewUrl,
+        description: postDescription.trim(),
+        createdAt: new Date().toISOString(),
+      };
 
-      for (const file of imageFiles) {
-        // Limit individual file size (~4MB after base64)
-        if (file.size > 4 * 1024 * 1024) {
-          showToast(`${file.name} is too large (max ~4MB)`);
-          continue;
-        }
+      const updatedUser: User = {
+        ...currentUser,
+        posts: [newPost, ...currentPosts], // newest first
+      };
 
-        const dataUrl = await convertFileToDataUrl(file);
-
-        newPhotos.push({
-          // eslint-disable-next-line react-hooks/purity
-          id: "photo_" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)),
-          name: file.name,
-          dataUrl,
-          uploadedAt: new Date().toISOString(),
-        });
-      }
-
-      if (newPhotos.length > 0) {
-        const updatedUser: User = {
-          ...currentUser,
-          photos: [...currentPhotos, ...newPhotos],
-        };
-        setCurrentUser(updatedUser);
-        showToast(
-          newPhotos.length === 1
-            ? "Photo added successfully"
-            : `${newPhotos.length} photos added`
-        );
-      }
+      setCurrentUser(updatedUser);
+      showToast("Post created!");
+      closeUploadModal();
     } catch (error) {
-      showToast("Something went wrong while uploading");
+      showToast("Failed to create post");
       console.error(error);
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handlePhotoUploadClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      addPhotosFromFiles(e.target.files);
-      // Reset input so same file can be selected again
-      e.target.value = "";
-    }
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      addPhotosFromFiles(e.dataTransfer.files);
-    }
-  };
-
-  const deletePhoto = (photoId: string) => {
+  const deletePost = (postId: string) => {
     if (!currentUser) return;
 
-    const updatedPhotos = (currentUser.photos || []).filter((p) => p.id !== photoId);
+    const updatedPosts = (currentUser.posts || []).filter((p) => p.id !== postId);
 
     const updatedUser: User = {
       ...currentUser,
-      photos: updatedPhotos.length > 0 ? updatedPhotos : undefined,
+      posts: updatedPosts.length > 0 ? updatedPosts : undefined,
     };
 
     setCurrentUser(updatedUser);
-    showToast("Photo deleted");
+    showToast("Post deleted");
+  };
+
+  // Legacy support: convert old photos into posts (one-time migration)
+  const migrateOldPhotosToPosts = (user: User): User => {
+    const oldPhotos = (user as any).photos as any[] | undefined;
+
+    if (user.posts || !oldPhotos || oldPhotos.length === 0) {
+      return user;
+    }
+
+    const migratedPosts: Post[] = oldPhotos.map((oldPhoto) => ({
+      id: "post_" + (oldPhoto.id || Date.now()),
+      imageDataUrl: oldPhoto.dataUrl || oldPhoto.imageDataUrl,
+      description: (oldPhoto.name || "Photo").replace(/\.[^/.]+$/, ""),
+      createdAt: oldPhoto.uploadedAt || new Date().toISOString(),
+    }));
+
+    const { photos, ...rest } = user as any;
+    return {
+      ...rest,
+      posts: migratedPosts,
+    };
   };
 
   const scrollToSignup = () => {
@@ -445,7 +463,7 @@ export default function PhotoSharePrototype() {
             </div>
           </div>
         ) : (
-          /* POST-SIGNUP PROTOTYPE DASHBOARD VIEW */
+          /* POST-SIGNUP PROTOTYPE DASHBOARD VIEW - Timeline Style */
           <div className="space-y-8">
             {showSuccess && (
               <div className="rounded-3xl bg-emerald-600 text-white px-6 py-5 text-center text-lg font-medium shadow">
@@ -466,7 +484,7 @@ export default function PhotoSharePrototype() {
               </button>
             </div>
 
-            {/* Family Photo (the original one the user added) */}
+            {/* Original Family Photo as a special pinned post */}
             <div className="overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">
               <div className="relative">
                 <Image
@@ -477,124 +495,180 @@ export default function PhotoSharePrototype() {
                   className="w-full aspect-[16/10] object-cover"
                   priority
                 />
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6 text-white">
-                  <div className="text-sm opacity-80">Family photo • Your first memory</div>
-                  <div className="text-2xl font-semibold tracking-tight">The whole family at the lake</div>
-                </div>
               </div>
-              <div className="px-6 py-4 text-sm text-stone-600 border-t">
-                This photo came with your account. You can now add more photos below.
+              <div className="p-5">
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="font-semibold">{currentUser.name}</div>
+                  <div className="text-xs text-stone-500">• Family photo</div>
+                </div>
+                <p className="text-stone-700">The whole family at the lake. Our favorite place.</p>
               </div>
             </div>
 
-            {/* Photo Upload Section */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="text-xl font-semibold tracking-tight">Your Photos</h3>
-                  <p className="text-sm text-stone-500">
-                    {(currentUser.photos?.length || 0)} photo{(currentUser.photos?.length || 0) !== 1 ? "s" : ""} • Max {MAX_PHOTOS} in this prototype
-                  </p>
-                </div>
-                <button
-                  onClick={handlePhotoUploadClick}
-                  disabled={isUploading || (currentUser.photos?.length || 0) >= MAX_PHOTOS}
-                  className="flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                >
-                  {isUploading ? "Uploading..." : "+ Upload photos"}
-                </button>
+            {/* Upload Button + Timeline Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-xl font-semibold tracking-tight">Your Timeline</h3>
+                <p className="text-sm text-stone-500">
+                  {(currentUser.posts?.length || 0)} post{(currentUser.posts?.length || 0) !== 1 ? "s" : ""}
+                </p>
               </div>
-
-              {/* Hidden file input */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                onChange={handleFileInputChange}
-                className="hidden"
-              />
-
-              {/* Drag & Drop Upload Zone */}
-              <div
-                onDragEnter={handleDrag}
-                onDragOver={handleDrag}
-                onDragLeave={handleDrag}
-                onDrop={handleDrop}
-                onClick={handlePhotoUploadClick}
-                className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all mb-6
-                  ${dragActive 
-                    ? "border-emerald-500 bg-emerald-50" 
-                    : "border-stone-300 hover:border-stone-400 hover:bg-stone-50"
-                  }`}
+              <button
+                onClick={openUploadModal}
+                disabled={isUploading || (currentUser.posts?.length || 0) >= MAX_POSTS}
+                className="flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition"
               >
-                <div className="flex flex-col items-center gap-3">
-                  <div className="text-4xl">📸</div>
-                  <div>
-                    <p className="font-medium text-stone-700">
-                      {isUploading ? "Processing photos..." : "Drop photos here or click to upload"}
-                    </p>
-                    <p className="text-xs text-stone-500 mt-1">
-                      JPG, PNG • Up to ~4MB each • {MAX_PHOTOS} photos max
-                    </p>
-                  </div>
-                </div>
-              </div>
+                + Create post
+              </button>
+            </div>
 
-              {/* Uploaded Photos Grid */}
-              {currentUser.photos && currentUser.photos.length > 0 ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {currentUser.photos.map((photo) => (
-                    <div key={photo.id} className="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-                      <div className="aspect-square relative bg-stone-100">
-                        <img
-                          src={photo.dataUrl}
-                          alt={photo.name}
-                          className="w-full h-full object-cover"
-                        />
+            {/* Timeline Feed */}
+            {currentUser.posts && currentUser.posts.length > 0 ? (
+              <div className="space-y-6">
+                {currentUser.posts.map((post) => (
+                  <div key={post.id} className="rounded-3xl border border-stone-200 bg-white shadow-sm overflow-hidden">
+                    {/* Post Header */}
+                    <div className="flex items-center justify-between px-5 py-4 border-b">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-emerald-600 flex items-center justify-center text-white text-sm font-semibold">
+                          {currentUser.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="font-semibold">{currentUser.name}</div>
+                          <div className="text-xs text-stone-500">
+                            {new Date(post.createdAt).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </div>
+                        </div>
                       </div>
-                      <div className="p-3">
-                        <p className="text-sm font-medium truncate text-stone-700" title={photo.name}>
-                          {photo.name}
-                        </p>
-                        <p className="text-xs text-stone-500">
-                          {new Date(photo.uploadedAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      {/* Delete button */}
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deletePhoto(photo.id);
-                        }}
-                        className="absolute top-2 right-2 bg-white/90 hover:bg-red-500 hover:text-white text-red-600 rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition shadow"
-                        title="Delete photo"
+                        onClick={() => deletePost(post.id)}
+                        className="text-stone-400 hover:text-red-500 p-1 rounded-full hover:bg-stone-100 transition"
+                        title="Delete post"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6h12v12" />
                         </svg>
                       </button>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                /* Empty State */
-                <div className="border border-stone-200 rounded-3xl p-8 text-center bg-white">
-                  <div className="text-5xl mb-4">🖼️</div>
-                  <p className="font-medium text-stone-700">No photos yet</p>
-                  <p className="text-sm text-stone-500 mt-1">
-                    Upload some photos to see them appear here.
-                  </p>
-                </div>
-              )}
-            </div>
 
-            <div className="text-center text-sm text-stone-500 max-w-sm mx-auto pt-4">
-              Photos are saved in your browser for this demo. They will disappear if you clear your browser data.
+                    {/* Photo */}
+                    <div className="bg-stone-100">
+                      <img
+                        src={post.imageDataUrl}
+                        alt={post.description || "Uploaded photo"}
+                        className="w-full max-h-[520px] object-contain bg-white"
+                      />
+                    </div>
+
+                    {/* Caption */}
+                    <div className="px-5 py-4">
+                      <div className="flex gap-2">
+                        <span className="font-semibold">{currentUser.name}</span>
+                        <span className="text-stone-700 whitespace-pre-wrap">{post.description || ""}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="border border-stone-200 rounded-3xl p-10 text-center bg-white">
+                <div className="text-5xl mb-4">📷</div>
+                <p className="font-medium text-lg">Your timeline is empty</p>
+                <p className="text-stone-500 mt-2 max-w-xs mx-auto">
+                  Share your first photo with a caption. It will appear here like a social media post.
+                </p>
+                <button
+                  onClick={openUploadModal}
+                  className="mt-6 rounded-full bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 transition"
+                >
+                  Create your first post
+                </button>
+              </div>
+            )}
+
+            <div className="text-center text-sm text-stone-500 max-w-sm mx-auto pt-2">
+              Posts are saved in your browser only. Great for testing the feel of the app.
             </div>
           </div>
         )}
       </section>
+
+      {/* Upload Post Modal */}
+      {isUploadModalOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-xl">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b">
+              <h3 className="font-semibold text-lg">Create new post</h3>
+              <button onClick={closeUploadModal} className="text-stone-400 hover:text-stone-600 text-2xl leading-none">×</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Image Preview or Upload Prompt */}
+              {previewUrl ? (
+                <div className="relative rounded-2xl overflow-hidden border border-stone-200">
+                  <img src={previewUrl} alt="Preview" className="w-full max-h-[320px] object-contain bg-stone-100" />
+                  <button
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setPreviewUrl(null);
+                    }}
+                    className="absolute top-3 right-3 bg-white/90 text-xs px-3 py-1 rounded-full shadow"
+                  >
+                    Change photo
+                  </button>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center border-2 border-dashed border-stone-300 rounded-2xl py-12 cursor-pointer hover:border-stone-400 transition">
+                  <div className="text-5xl mb-3">📷</div>
+                  <div className="font-medium">Choose a photo</div>
+                  <div className="text-xs text-stone-500 mt-1">JPG or PNG up to 5MB</div>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileSelectForModal}
+                    className="hidden"
+                  />
+                </label>
+              )}
+
+              {/* Description / Caption */}
+              <div>
+                <label className="block text-sm font-medium text-stone-700 mb-1.5">Write a caption</label>
+                <textarea
+                  value={postDescription}
+                  onChange={(e) => setPostDescription(e.target.value)}
+                  placeholder="What’s happening in this photo?"
+                  rows={3}
+                  className="w-full resize-y rounded-2xl border border-stone-300 px-4 py-3 text-sm focus:border-emerald-600 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex gap-3 px-5 py-4 border-t bg-stone-50">
+              <button
+                onClick={closeUploadModal}
+                className="flex-1 rounded-2xl border border-stone-300 py-3 text-sm font-medium hover:bg-white transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreatePost}
+                disabled={!selectedFile || isUploading}
+                className="flex-1 rounded-2xl bg-emerald-600 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition"
+              >
+                {isUploading ? "Posting..." : "Post"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Static prototype sections below (no real links) */}
       <div className="border-t border-stone-200 bg-white">
