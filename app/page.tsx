@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 
 // ============================================
@@ -10,11 +10,19 @@ import Image from "next/image";
 // Real family photo now included in /public/images/
 // ============================================
 
+interface Photo {
+  id: string;
+  name: string;
+  dataUrl: string; // base64 encoded image
+  uploadedAt: string;
+}
+
 interface User {
   id: string;
   name: string;
   email: string;
   createdAt: string;
+  photos?: Photo[];
 }
 
 // The user's actual family photo (added to the project)
@@ -50,6 +58,11 @@ export default function PhotoSharePrototype() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [showSuccess, setShowSuccess] = useState(false);
 
+  // Photo upload state
+  const [isUploading, setIsUploading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Persist user whenever it changes
   useEffect(() => {
     if (currentUser) {
@@ -59,7 +72,8 @@ export default function PhotoSharePrototype() {
 
   // --- Simple non-blocking toast for prototype actions ---
   const showToast = (text: string) => {
-    const id = Date.now();
+    // eslint-disable-next-line react-hooks/purity
+    const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, text }]);
 
     // Auto dismiss after 2.2 seconds
@@ -129,6 +143,129 @@ export default function PhotoSharePrototype() {
     setEmail("");
     setPassword("");
     showToast("Signed out — demo data cleared for this browser");
+  };
+
+  // ============================================
+  // Photo Upload Feature (Prototype - Client Side)
+  // ============================================
+
+  const MAX_PHOTOS = 8;
+
+  const convertFileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const addPhotosFromFiles = async (files: FileList | File[]) => {
+    if (!currentUser) return;
+
+    const fileArray = Array.from(files);
+    const imageFiles = fileArray.filter((file) =>
+      file.type.startsWith("image/")
+    );
+
+    if (imageFiles.length === 0) {
+      showToast("Please select image files (JPG, PNG, etc.)");
+      return;
+    }
+
+    const currentPhotos = currentUser.photos || [];
+    if (currentPhotos.length + imageFiles.length > MAX_PHOTOS) {
+      showToast(`You can upload up to ${MAX_PHOTOS} photos in this prototype`);
+      return;
+    }
+
+    setIsUploading(true);
+
+    try {
+      const newPhotos: Photo[] = [];
+
+      for (const file of imageFiles) {
+        // Limit individual file size (~4MB after base64)
+        if (file.size > 4 * 1024 * 1024) {
+          showToast(`${file.name} is too large (max ~4MB)`);
+          continue;
+        }
+
+        const dataUrl = await convertFileToDataUrl(file);
+
+        newPhotos.push({
+          // eslint-disable-next-line react-hooks/purity
+          id: "photo_" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)),
+          name: file.name,
+          dataUrl,
+          uploadedAt: new Date().toISOString(),
+        });
+      }
+
+      if (newPhotos.length > 0) {
+        const updatedUser: User = {
+          ...currentUser,
+          photos: [...currentPhotos, ...newPhotos],
+        };
+        setCurrentUser(updatedUser);
+        showToast(
+          newPhotos.length === 1
+            ? "Photo added successfully"
+            : `${newPhotos.length} photos added`
+        );
+      }
+    } catch (error) {
+      showToast("Something went wrong while uploading");
+      console.error(error);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handlePhotoUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      addPhotosFromFiles(e.target.files);
+      // Reset input so same file can be selected again
+      e.target.value = "";
+    }
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addPhotosFromFiles(e.dataTransfer.files);
+    }
+  };
+
+  const deletePhoto = (photoId: string) => {
+    if (!currentUser) return;
+
+    const updatedPhotos = (currentUser.photos || []).filter((p) => p.id !== photoId);
+
+    const updatedUser: User = {
+      ...currentUser,
+      photos: updatedPhotos.length > 0 ? updatedPhotos : undefined,
+    };
+
+    setCurrentUser(updatedUser);
+    showToast("Photo deleted");
   };
 
   const scrollToSignup = () => {
@@ -329,7 +466,7 @@ export default function PhotoSharePrototype() {
               </button>
             </div>
 
-            {/* The one family photo, now presented as "your" photo */}
+            {/* Family Photo (the original one the user added) */}
             <div className="overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">
               <div className="relative">
                 <Image
@@ -341,24 +478,119 @@ export default function PhotoSharePrototype() {
                   priority
                 />
                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-6 text-white">
-                  <div className="text-sm opacity-80">Your first memory • Today</div>
+                  <div className="text-sm opacity-80">Family photo • Your first memory</div>
                   <div className="text-2xl font-semibold tracking-tight">The whole family at the lake</div>
                 </div>
               </div>
-              <div className="flex items-center justify-between border-t px-6 py-4 text-sm">
-                <div className="text-stone-600">3 people • 1 photo</div>
-                <button
-                  onClick={() => showToast("Photo upload coming soon")}
-                  className="font-medium text-emerald-700 hover:text-emerald-800"
-                >
-                  + Add another photo
-                </button>
+              <div className="px-6 py-4 text-sm text-stone-600 border-t">
+                This photo came with your account. You can now add more photos below.
               </div>
             </div>
 
-            <div className="text-center text-sm text-stone-500 max-w-xs mx-auto">
-              This is a realistic preview of what the experience will feel like.
-              More features (real uploads, albums, sharing) are coming next.
+            {/* Photo Upload Section */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-xl font-semibold tracking-tight">Your Photos</h3>
+                  <p className="text-sm text-stone-500">
+                    {(currentUser.photos?.length || 0)} photo{(currentUser.photos?.length || 0) !== 1 ? "s" : ""} • Max {MAX_PHOTOS} in this prototype
+                  </p>
+                </div>
+                <button
+                  onClick={handlePhotoUploadClick}
+                  disabled={isUploading || (currentUser.photos?.length || 0) >= MAX_PHOTOS}
+                  className="flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                >
+                  {isUploading ? "Uploading..." : "+ Upload photos"}
+                </button>
+              </div>
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleFileInputChange}
+                className="hidden"
+              />
+
+              {/* Drag & Drop Upload Zone */}
+              <div
+                onDragEnter={handleDrag}
+                onDragOver={handleDrag}
+                onDragLeave={handleDrag}
+                onDrop={handleDrop}
+                onClick={handlePhotoUploadClick}
+                className={`border-2 border-dashed rounded-3xl p-8 text-center cursor-pointer transition-all mb-6
+                  ${dragActive 
+                    ? "border-emerald-500 bg-emerald-50" 
+                    : "border-stone-300 hover:border-stone-400 hover:bg-stone-50"
+                  }`}
+              >
+                <div className="flex flex-col items-center gap-3">
+                  <div className="text-4xl">📸</div>
+                  <div>
+                    <p className="font-medium text-stone-700">
+                      {isUploading ? "Processing photos..." : "Drop photos here or click to upload"}
+                    </p>
+                    <p className="text-xs text-stone-500 mt-1">
+                      JPG, PNG • Up to ~4MB each • {MAX_PHOTOS} photos max
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Uploaded Photos Grid */}
+              {currentUser.photos && currentUser.photos.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {currentUser.photos.map((photo) => (
+                    <div key={photo.id} className="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+                      <div className="aspect-square relative bg-stone-100">
+                        <img
+                          src={photo.dataUrl}
+                          alt={photo.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="p-3">
+                        <p className="text-sm font-medium truncate text-stone-700" title={photo.name}>
+                          {photo.name}
+                        </p>
+                        <p className="text-xs text-stone-500">
+                          {new Date(photo.uploadedAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      {/* Delete button */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deletePhoto(photo.id);
+                        }}
+                        className="absolute top-2 right-2 bg-white/90 hover:bg-red-500 hover:text-white text-red-600 rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition shadow"
+                        title="Delete photo"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6h12v12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                /* Empty State */
+                <div className="border border-stone-200 rounded-3xl p-8 text-center bg-white">
+                  <div className="text-5xl mb-4">🖼️</div>
+                  <p className="font-medium text-stone-700">No photos yet</p>
+                  <p className="text-sm text-stone-500 mt-1">
+                    Upload some photos to see them appear here.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="text-center text-sm text-stone-500 max-w-sm mx-auto pt-4">
+              Photos are saved in your browser for this demo. They will disappear if you clear your browser data.
             </div>
           </div>
         )}
