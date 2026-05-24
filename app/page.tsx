@@ -68,6 +68,7 @@ export default function PhotoSharePrototype() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [postDescription, setPostDescription] = useState("");
+  const [postToDelete, setPostToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Persist user whenever it changes
@@ -546,7 +547,7 @@ export default function PhotoSharePrototype() {
                         </div>
                       </div>
                       <button
-                        onClick={() => deletePost(post.id)}
+                        onClick={() => setPostToDelete(post.id)}
                         className="text-stone-400 hover:text-red-500 p-1 rounded-full hover:bg-stone-100 transition"
                         title="Delete post"
                       >
@@ -664,6 +665,46 @@ export default function PhotoSharePrototype() {
                 className="flex-1 rounded-2xl bg-emerald-600 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition"
               >
                 {isUploading ? "Posting..." : "Post"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {postToDelete && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-xl">
+            <div className="p-6 text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.595-1.858L5 7m5 4v6m4-6v6m1-10V9a1 1 0 00-1-1H9a1 1 0 00-1 1v1m-2 0h10" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-stone-900">Delete post?</h3>
+              <p className="mt-2 text-sm text-stone-600">
+                Are you sure? This cannot be undone.
+              </p>
+            </div>
+
+            <div className="flex border-t">
+              <button
+                onClick={() => setPostToDelete(null)}
+                className="flex-1 py-4 text-sm font-medium text-stone-700 hover:bg-stone-50 transition"
+              >
+                Cancel
+              </button>
+              <div className="w-px bg-stone-200" />
+              <button
+                onClick={() => {
+                  if (postToDelete) {
+                    deletePost(postToDelete);
+                  }
+                  setPostToDelete(null);
+                }}
+                className="flex-1 py-4 text-sm font-semibold text-red-600 hover:bg-red-50 transition"
+              >
+                Delete
               </button>
             </div>
           </div>
