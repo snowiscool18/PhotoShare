@@ -30,20 +30,22 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# Local env files (never commit these)
+.env*.local
 
-# vercel
+# Allow committing example env files
+!.env.example
+!.env*.example
+
+# Vercel
 .vercel
 
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-# PhotoShare specific (future real uploads, media, etc.)
+# PhotoShare specific
 /uploads
 /media
 /public/uploads
 *.tmp
-.env.local
-.env.*.local
