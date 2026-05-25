@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
+import { createClient } from "@/lib/supabase/client";
 
 // ============================================
 // PhotoShare — Minimal Prototype (v0)
@@ -35,6 +36,8 @@ type ToastMessage = {
 };
 
 export default function PhotoSharePrototype() {
+  const supabase = createClient();
+
   // --- Auth / User State (the only real feature) ---
   // Initialize directly from localStorage so we never call setState in an effect
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -103,7 +106,7 @@ export default function PhotoSharePrototype() {
   };
 
   // --- The only real feature: Create user ---
-  const handleCreateAccount = (e: React.FormEvent) => {
+  const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError("");
 
@@ -117,37 +120,43 @@ export default function PhotoSharePrototype() {
       return;
     }
     if (!password || password.length < 6) {
-      setFormError("Password must be at least 6 characters (demo only).");
+      setFormError("Password must be at least 6 characters.");
       return;
     }
 
     setIsSubmitting(true);
 
-    // Simulate a tiny network delay (makes it feel real)
-    setTimeout(() => {
-      const newUser: User = {
-        id: "user_" + Date.now().toString(36),
-        name: name.trim(),
+    try {
+      const { data, error } = await supabase.auth.signUp({
         email: email.trim().toLowerCase(),
-        createdAt: new Date().toISOString(),
-      };
+        password,
+        options: {
+          data: {
+            full_name: name.trim(),
+          },
+        },
+      });
 
-      setCurrentUser(newUser);
-      setShowSuccess(true);
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
 
-      // Clear form
-      setName("");
-      setEmail("");
-      setPassword("");
-      setFormError("");
+      if (data.user) {
+        showToast("Account created successfully!");
 
-      // After a short celebration, hide the raw success banner
-      setTimeout(() => {
-        setShowSuccess(false);
-      }, 1400);
-
+        // Clear form
+        setName("");
+        setEmail("");
+        setPassword("");
+        setFormError("");
+      }
+    } catch (err) {
+      setFormError("Something went wrong. Please try again.");
+      console.error(err);
+    } finally {
       setIsSubmitting(false);
-    }, 420);
+    }
   };
 
   const handleSignOut = () => {
