@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
 // ============================================
 // PhotoShare — Minimal Prototype (v0)
@@ -18,14 +19,6 @@ interface Post {
   createdAt: string;
 }
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  createdAt: string;
-  posts?: Post[];
-}
-
 // The user's actual family photo (added to the project)
 const FAMILY_PHOTO_URL = "/images/IMG_7557.jpg";
 const FAMILY_PHOTO_ALT = "Family photo";
@@ -37,12 +30,12 @@ type ToastMessage = {
 
 export default function PhotoSharePrototype() {
   const supabase = createClient();
+  const { user, isLoading: isLoadingAuth, signOut } = useAuth();
 
   const [authMode, setAuthMode] = useState<'signup' | 'signin'>('signup');
 
-  // --- Auth / User State ---
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  // Posts are stored per-user in localStorage for now (until we move to Supabase DB)
+  const [posts, setPosts] = useState<Post[]>([]);
 
   // Form state
   const [name, setName] = useState("");
@@ -64,48 +57,14 @@ export default function PhotoSharePrototype() {
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Real Supabase session handling for persistence
+  // Load posts when user logs in (still using localStorage for now)
   useEffect(() => {
-    setIsLoadingAuth(true);
-
-    // Listen for auth changes (login, logout, token refresh)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (session?.user) {
-          const user = session.user;
-          const newUser: User = {
-            id: user.id,
-            name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
-            email: user.email || '',
-            createdAt: user.created_at || new Date().toISOString(),
-          };
-          setCurrentUser(newUser);
-        } else {
-          setCurrentUser(null);
-        }
-        setIsLoadingAuth(false);
-      }
-    );
-
-    // Check for existing session on initial load
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        const user = session.user;
-        const newUser: User = {
-          id: user.id,
-          name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
-          email: user.email || '',
-          createdAt: user.created_at || new Date().toISOString(),
-        };
-        setCurrentUser(newUser);
-      }
-      setIsLoadingAuth(false);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
+    if (user?.id) {
+      loadUserPosts(user.id);
+    } else {
+      setPosts([]);
+    }
+  }, [user]);
 
   // --- Simple non-blocking toast for prototype actions ---
   const showToast = (text: string) => {
@@ -200,14 +159,6 @@ export default function PhotoSharePrototype() {
       }
 
       if (data.user) {
-        const newUser: User = {
-          id: data.user.id,
-          name: data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'User',
-          email: data.user.email || '',
-          createdAt: data.user.created_at || new Date().toISOString(),
-        };
-
-        setCurrentUser(newUser);
         setShowSuccess(true);
 
         setEmail("");
@@ -223,8 +174,7 @@ export default function PhotoSharePrototype() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    setCurrentUser(null);
+    await signOut();
     localStorage.removeItem("photoshare_demo_user");
     setShowSuccess(false);
     // Gentle reset of form fields for easy re-testing
@@ -291,10 +241,9 @@ export default function PhotoSharePrototype() {
 
   // Create a new post with photo + description
   const handleCreatePost = async () => {
-    if (!currentUser || !selectedFile || !previewUrl) return;
+    if (!user || !selectedFile || !previewUrl) return;
 
-    const currentPosts = currentUser.posts || [];
-    if (currentPosts.length >= MAX_POSTS) {
+    if (posts.length >= MAX_POSTS) {
       showToast(`You've reached the limit of ${MAX_POSTS} posts in this prototype`);
       return;
     }
@@ -309,12 +258,10 @@ export default function PhotoSharePrototype() {
         createdAt: new Date().toISOString(),
       };
 
-      const updatedUser: User = {
-        ...currentUser,
-        posts: [newPost, ...currentPosts], // newest first
-      };
+      const updated = [newPost, ...posts];
+      setPosts(updated);
+      saveUserPosts(user.id, updated);
 
-      setCurrentUser(updatedUser);
       showToast("Post created!");
       closeUploadModal();
     } catch (error) {
@@ -326,40 +273,38 @@ export default function PhotoSharePrototype() {
   };
 
   const deletePost = (postId: string) => {
-    if (!currentUser) return;
+    if (!user) return;
 
-    const updatedPosts = (currentUser.posts || []).filter((p) => p.id !== postId);
-
-    const updatedUser: User = {
-      ...currentUser,
-      posts: updatedPosts.length > 0 ? updatedPosts : undefined,
-    };
-
-    setCurrentUser(updatedUser);
+    const updated = posts.filter((p) => p.id !== postId);
+    setPosts(updated);
+    saveUserPosts(user.id, updated);
     showToast("Post deleted");
   };
 
-  // Legacy support: convert old photos into posts (one-time migration)
-  const migrateOldPhotosToPosts = (user: User): User => {
-    const oldPhotos = (user as any).photos as any[] | undefined;
-
-    if (user.posts || !oldPhotos || oldPhotos.length === 0) {
-      return user;
+  // Load posts for a specific user from localStorage
+  const loadUserPosts = (userId: string) => {
+    try {
+      const saved = localStorage.getItem(`photoshare_posts_${userId}`);
+      if (saved) {
+        setPosts(JSON.parse(saved));
+      } else {
+        setPosts([]);
+      }
+    } catch {
+      setPosts([]);
     }
-
-    const migratedPosts: Post[] = oldPhotos.map((oldPhoto) => ({
-      id: "post_" + (oldPhoto.id || Date.now()),
-      imageDataUrl: oldPhoto.dataUrl || oldPhoto.imageDataUrl,
-      description: (oldPhoto.name || "Photo").replace(/\.[^/.]+$/, ""),
-      createdAt: oldPhoto.uploadedAt || new Date().toISOString(),
-    }));
-
-    const { photos, ...rest } = user as any;
-    return {
-      ...rest,
-      posts: migratedPosts,
-    };
   };
+
+  // Save posts for a user to localStorage
+  const saveUserPosts = (userId: string, userPosts: Post[]) => {
+    try {
+      localStorage.setItem(`photoshare_posts_${userId}`, JSON.stringify(userPosts));
+    } catch (e) {
+      console.error("Failed to save posts", e);
+    }
+  };
+
+  // Note: Old photo-to-post migration removed as we moved to per-user localStorage storage for posts.
 
   const scrollToSignup = () => {
     const el = document.getElementById("signup-section");
@@ -392,9 +337,9 @@ export default function PhotoSharePrototype() {
           </div>
 
           <div className="flex items-center gap-3">
-            {currentUser ? (
+            {user ? (
               <div className="flex items-center gap-3 text-sm">
-                <span className="hidden text-stone-600 md:inline">Hi, {currentUser.name.split(" ")[0]}</span>
+                <span className="hidden text-stone-600 md:inline">Hi, {user?.user_metadata?.full_name?.split(" ")[0] || user?.email?.split('@')[0]}</span>
                 <button
                   onClick={handleSignOut}
                   className="rounded-full border border-stone-300 px-4 py-1.5 text-sm font-medium hover:bg-stone-100 active:bg-stone-200 transition"
@@ -474,7 +419,7 @@ export default function PhotoSharePrototype() {
           <div className="text-center py-12">
             <div className="text-stone-500">Loading...</div>
           </div>
-        ) : !currentUser ? (
+        ) : !user ? (
           <div>
             <div className="text-center mb-8">
               <div className="text-emerald-600 text-sm font-semibold tracking-widest mb-2">STEP 1 OF 1 (FOR NOW)</div>
@@ -593,14 +538,16 @@ export default function PhotoSharePrototype() {
           <div className="space-y-8">
             {showSuccess && (
               <div className="rounded-3xl bg-emerald-600 text-white px-6 py-5 text-center text-lg font-medium shadow">
-                Welcome to PhotoShare, {currentUser.name.split(" ")[0]}! 🎉
+                Welcome to PhotoShare, {user?.user_metadata?.full_name?.split(" ")[0] || user?.email?.split('@')[0]}! 🎉
               </div>
             )}
 
             <div className="flex items-end justify-between">
               <div>
                 <div className="uppercase tracking-[3px] text-xs text-emerald-700 font-semibold">Welcome back</div>
-                <h2 className="text-4xl font-semibold tracking-tighter">{currentUser.name}</h2>
+                <h2 className="text-4xl font-semibold tracking-tighter">
+                  {user?.user_metadata?.full_name || user?.email?.split('@')[0]}
+                </h2>
               </div>
               <button
                 onClick={handleSignOut}
@@ -624,7 +571,7 @@ export default function PhotoSharePrototype() {
               </div>
               <div className="p-5">
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="font-semibold">{currentUser.name}</div>
+                  <div className="font-semibold">{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</div>
                   <div className="text-xs text-stone-500">• Family photo</div>
                 </div>
                 <p className="text-stone-700">The whole family at the lake. Our favorite place.</p>
@@ -636,12 +583,12 @@ export default function PhotoSharePrototype() {
               <div>
                 <h3 className="text-xl font-semibold tracking-tight">Your Timeline</h3>
                 <p className="text-sm text-stone-500">
-                  {(currentUser.posts?.length || 0)} post{(currentUser.posts?.length || 0) !== 1 ? "s" : ""}
+                  {posts.length} post{posts.length !== 1 ? "s" : ""}
                 </p>
               </div>
               <button
                 onClick={openUploadModal}
-                disabled={isUploading || (currentUser.posts?.length || 0) >= MAX_POSTS}
+                disabled={isUploading || posts.length >= MAX_POSTS}
                 className="flex items-center gap-2 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition"
               >
                 + Create post
@@ -649,18 +596,18 @@ export default function PhotoSharePrototype() {
             </div>
 
             {/* Timeline Feed */}
-            {currentUser.posts && currentUser.posts.length > 0 ? (
+            {posts.length > 0 ? (
               <div className="space-y-6">
-                {currentUser.posts.map((post) => (
+                {posts.map((post) => (
                   <div key={post.id} className="rounded-3xl border border-stone-200 bg-white shadow-sm overflow-hidden">
                     {/* Post Header */}
                     <div className="flex items-center justify-between px-5 py-4 border-b">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-full bg-emerald-600 flex items-center justify-center text-white text-sm font-semibold">
-                          {currentUser.name.charAt(0).toUpperCase()}
+                          {(user?.user_metadata?.full_name || user?.email || 'U').charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <div className="font-semibold">{currentUser.name}</div>
+                          <div className="font-semibold">{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</div>
                           <div className="text-xs text-stone-500">
                             {new Date(post.createdAt).toLocaleDateString(undefined, {
                               month: "short",
@@ -694,7 +641,7 @@ export default function PhotoSharePrototype() {
                     {/* Caption */}
                     <div className="px-5 py-4">
                       <div className="flex gap-2">
-                        <span className="font-semibold">{currentUser.name}</span>
+                        <span className="font-semibold">{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</span>
                         <span className="text-stone-700 whitespace-pre-wrap">{post.description || ""}</span>
                       </div>
                     </div>
