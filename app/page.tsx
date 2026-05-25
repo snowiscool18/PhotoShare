@@ -38,21 +38,11 @@ type ToastMessage = {
 export default function PhotoSharePrototype() {
   const supabase = createClient();
 
-  // --- Auth / User State (the only real feature) ---
-  // Initialize directly from localStorage so we never call setState in an effect
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    if (typeof window === "undefined") return null;
-    try {
-      const saved = localStorage.getItem("photoshare_demo_user");
-      if (!saved) return null;
-      const parsed: User = JSON.parse(saved);
-      // Migrate old photo data to new post format
-      // eslint-disable-next-line react-hooks/purity
-      return migrateOldPhotosToPosts(parsed);
-    } catch {
-      return null;
-    }
-  });
+  const [authMode, setAuthMode] = useState<'signup' | 'signin'>('signup');
+
+  // --- Auth / User State ---
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
   // Form state
   const [name, setName] = useState("");
@@ -74,20 +64,48 @@ export default function PhotoSharePrototype() {
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Persist user whenever it changes
+  // Real Supabase session handling for persistence
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem("photoshare_demo_user", JSON.stringify(currentUser));
-    }
-  }, [currentUser]);
+    setIsLoadingAuth(true);
 
-  // One-time migration for users who had the old photos format
-  useEffect(() => {
-    if (currentUser && (currentUser as any).photos && !currentUser.posts) {
-      const migrated = migrateOldPhotosToPosts(currentUser);
-      setCurrentUser(migrated);
-    }
-  }, [currentUser]);
+    // Listen for auth changes (login, logout, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (session?.user) {
+          const user = session.user;
+          const newUser: User = {
+            id: user.id,
+            name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+            email: user.email || '',
+            createdAt: user.created_at || new Date().toISOString(),
+          };
+          setCurrentUser(newUser);
+        } else {
+          setCurrentUser(null);
+        }
+        setIsLoadingAuth(false);
+      }
+    );
+
+    // Check for existing session on initial load
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        const user = session.user;
+        const newUser: User = {
+          id: user.id,
+          name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User',
+          email: user.email || '',
+          createdAt: user.created_at || new Date().toISOString(),
+        };
+        setCurrentUser(newUser);
+      }
+      setIsLoadingAuth(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase]);
 
   // --- Simple non-blocking toast for prototype actions ---
   const showToast = (text: string) => {
@@ -159,7 +177,53 @@ export default function PhotoSharePrototype() {
     }
   };
 
-  const handleSignOut = () => {
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError("");
+
+    if (!email.trim() || !password) {
+      setFormError("Please enter your email and password.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      if (error) {
+        setFormError(error.message);
+        return;
+      }
+
+      if (data.user) {
+        const newUser: User = {
+          id: data.user.id,
+          name: data.user.user_metadata?.full_name || data.user.email?.split('@')[0] || 'User',
+          email: data.user.email || '',
+          createdAt: data.user.created_at || new Date().toISOString(),
+        };
+
+        setCurrentUser(newUser);
+        setShowSuccess(true);
+
+        setEmail("");
+        setPassword("");
+        setFormError("");
+      }
+    } catch (err) {
+      setFormError("Something went wrong. Please try again.");
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
     setCurrentUser(null);
     localStorage.removeItem("photoshare_demo_user");
     setShowSuccess(false);
@@ -167,7 +231,8 @@ export default function PhotoSharePrototype() {
     setName("");
     setEmail("");
     setPassword("");
-    showToast("Signed out — demo data cleared for this browser");
+    setAuthMode('signup');
+    showToast("Signed out");
   };
 
   // ============================================
@@ -405,27 +470,72 @@ export default function PhotoSharePrototype() {
 
       {/* The ONLY working feature on the entire site */}
       <section id="signup-section" className="mx-auto max-w-2xl px-6 pt-16 pb-12">
-        {!currentUser ? (
+        {isLoadingAuth ? (
+          <div className="text-center py-12">
+            <div className="text-stone-500">Loading...</div>
+          </div>
+        ) : !currentUser ? (
           <div>
             <div className="text-center mb-8">
               <div className="text-emerald-600 text-sm font-semibold tracking-widest mb-2">STEP 1 OF 1 (FOR NOW)</div>
-              <h2 className="text-4xl font-semibold tracking-tight">Create your account</h2>
-              <p className="mt-3 text-lg text-stone-600">This is the only fully working part of the prototype.</p>
+              <h2 className="text-4xl font-semibold tracking-tight">
+                {authMode === 'signup' ? 'Create your account' : 'Sign in to your account'}
+              </h2>
+              <p className="mt-3 text-lg text-stone-600">
+                {authMode === 'signup' 
+                  ? 'This is the only fully working part of the prototype.' 
+                  : 'Welcome back! Sign in to continue.'}
+              </p>
+            </div>
+
+            {/* Auth Mode Toggle - Option A */}
+            <div className="flex mb-6 rounded-2xl border border-stone-200 bg-stone-100 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('signup');
+                  setFormError('');
+                }}
+                className={`flex-1 rounded-xl py-2 text-sm font-medium transition ${
+                  authMode === 'signup' 
+                    ? 'bg-white text-stone-900 shadow-sm' 
+                    : 'text-stone-600 hover:text-stone-800'
+                }`}
+              >
+                Create Account
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('signin');
+                  setFormError('');
+                  setName(''); // Clear name when switching to signin
+                }}
+                className={`flex-1 rounded-xl py-2 text-sm font-medium transition ${
+                  authMode === 'signin' 
+                    ? 'bg-white text-stone-900 shadow-sm' 
+                    : 'text-stone-600 hover:text-stone-800'
+                }`}
+              >
+                Sign In
+              </button>
             </div>
 
             <div className="rounded-3xl border border-stone-200 bg-white p-8 md:p-10 shadow-sm">
-              <form onSubmit={handleCreateAccount} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Full name</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Alex Rivera"
-                    className="w-full rounded-2xl border border-stone-300 px-5 py-3.5 text-lg placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
-                    required
-                  />
-                </div>
+              <form onSubmit={authMode === 'signup' ? handleCreateAccount : handleSignIn} className="space-y-6">
+                {authMode === 'signup' && (
+                  <div>
+                    <label className="block text-sm font-medium text-stone-700 mb-1.5">Full name</label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Alex Rivera"
+                      className="w-full rounded-2xl border border-stone-300 px-5 py-3.5 text-lg placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+                      required
+                    />
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-stone-700 mb-1.5">Email address</label>
@@ -440,7 +550,7 @@ export default function PhotoSharePrototype() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Password (demo)</label>
+                  <label className="block text-sm font-medium text-stone-700 mb-1.5">Password</label>
                   <input
                     type="password"
                     value={password}
@@ -449,7 +559,11 @@ export default function PhotoSharePrototype() {
                     className="w-full rounded-2xl border border-stone-300 px-5 py-3.5 text-lg placeholder:text-stone-400 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
                     required
                   />
-                  <p className="mt-1.5 text-xs text-stone-500">We don’t actually store passwords yet — this is a prototype.</p>
+                  <p className="mt-1.5 text-xs text-stone-500">
+                    {authMode === 'signup' 
+                      ? "We'll use this to let you sign in later." 
+                      : "Enter your password to sign in."}
+                  </p>
                 </div>
 
                 {formError && (
@@ -463,7 +577,9 @@ export default function PhotoSharePrototype() {
                   disabled={isSubmitting}
                   className="mt-2 w-full rounded-2xl bg-emerald-600 py-4 text-lg font-semibold text-white hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-70 transition flex items-center justify-center gap-2"
                 >
-                  {isSubmitting ? "Creating your account..." : "Create free account"}
+                  {isSubmitting 
+                    ? (authMode === 'signup' ? "Creating your account..." : "Signing in...") 
+                    : (authMode === 'signup' ? "Create free account" : "Sign in")}
                 </button>
               </form>
 
