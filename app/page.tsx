@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { usePosts } from "@/hooks/usePosts";
 
 // ============================================
 // PhotoShare — Minimal Prototype (v0)
@@ -12,12 +13,7 @@ import { useAuth } from "@/hooks/useAuth";
 // Real family photo now included in /public/images/
 // ============================================
 
-interface Post {
-  id: string;
-  imageDataUrl: string;
-  description: string;
-  createdAt: string;
-}
+import type { Post } from '@/hooks/usePosts';
 
 // The user's actual family photo (added to the project)
 const FAMILY_PHOTO_URL = "/images/IMG_7557.jpg";
@@ -31,11 +27,18 @@ type ToastMessage = {
 export default function PhotoSharePrototype() {
   const supabase = createClient();
   const { user, isLoading: isLoadingAuth, signOut } = useAuth();
+  const { 
+    posts, 
+    loading: postsLoading, 
+    error: postsError, 
+    createPost: createPostFromHook, 
+    deletePost: deletePostFromHook,
+    refresh: refreshPosts 
+  } = usePosts();
 
   const [authMode, setAuthMode] = useState<'signup' | 'signin'>('signup');
 
-  // Posts are stored per-user in localStorage for now (until we move to Supabase DB)
-  const [posts, setPosts] = useState<Post[]>([]);
+  // Posts come from the usePosts hook (real Supabase data + temporary localStorage fallback)
 
   // Form state
   const [name, setName] = useState("");
@@ -57,14 +60,8 @@ export default function PhotoSharePrototype() {
   const [postToDelete, setPostToDelete] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load posts when user logs in (still using localStorage for now)
-  useEffect(() => {
-    if (user?.id) {
-      loadUserPosts(user.id);
-    } else {
-      setPosts([]);
-    }
-  }, [user]);
+  // Posts loading is now handled automatically inside the usePosts hook
+  // based on the authenticated user from useAuth()
 
   // --- Simple non-blocking toast for prototype actions ---
   const showToast = (text: string) => {
@@ -239,9 +236,9 @@ export default function PhotoSharePrototype() {
     reader.readAsDataURL(file);
   };
 
-  // Create a new post with photo + description
+  // Wrapper to use the real hook for creating posts
   const handleCreatePost = async () => {
-    if (!user || !selectedFile || !previewUrl) return;
+    if (!user || !selectedFile) return;
 
     if (posts.length >= MAX_POSTS) {
       showToast(`You've reached the limit of ${MAX_POSTS} posts in this prototype`);
@@ -251,21 +248,11 @@ export default function PhotoSharePrototype() {
     setIsUploading(true);
 
     try {
-      const newPost: Post = {
-        id: "post_" + (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)),
-        imageDataUrl: previewUrl,
-        description: postDescription.trim(),
-        createdAt: new Date().toISOString(),
-      };
-
-      const updated = [newPost, ...posts];
-      setPosts(updated);
-      saveUserPosts(user.id, updated);
-
+      await createPostFromHook(selectedFile, postDescription.trim());
       showToast("Post created!");
       closeUploadModal();
-    } catch (error) {
-      showToast("Failed to create post");
+    } catch (error: any) {
+      showToast(error.message || "Failed to create post");
       console.error(error);
     } finally {
       setIsUploading(false);
@@ -273,36 +260,12 @@ export default function PhotoSharePrototype() {
   };
 
   const deletePost = (postId: string) => {
-    if (!user) return;
-
-    const updated = posts.filter((p) => p.id !== postId);
-    setPosts(updated);
-    saveUserPosts(user.id, updated);
-    showToast("Post deleted");
+    deletePostFromHook(postId).catch((err: any) => {
+      showToast(err.message || "Failed to delete post");
+    });
   };
 
-  // Load posts for a specific user from localStorage
-  const loadUserPosts = (userId: string) => {
-    try {
-      const saved = localStorage.getItem(`photoshare_posts_${userId}`);
-      if (saved) {
-        setPosts(JSON.parse(saved));
-      } else {
-        setPosts([]);
-      }
-    } catch {
-      setPosts([]);
-    }
-  };
-
-  // Save posts for a user to localStorage
-  const saveUserPosts = (userId: string, userPosts: Post[]) => {
-    try {
-      localStorage.setItem(`photoshare_posts_${userId}`, JSON.stringify(userPosts));
-    } catch (e) {
-      console.error("Failed to save posts", e);
-    }
-  };
+  // Posts are now managed by usePosts hook (real-time from Supabase in future)
 
   // Note: Old photo-to-post migration removed as we moved to per-user localStorage storage for posts.
 
@@ -609,7 +572,7 @@ export default function PhotoSharePrototype() {
                         <div>
                           <div className="font-semibold">{user?.user_metadata?.full_name || user?.email?.split('@')[0]}</div>
                           <div className="text-xs text-stone-500">
-                            {new Date(post.createdAt).toLocaleDateString(undefined, {
+                            {new Date(post.created_at).toLocaleDateString(undefined, {
                               month: "short",
                               day: "numeric",
                               hour: "numeric",
@@ -632,7 +595,7 @@ export default function PhotoSharePrototype() {
                     {/* Photo */}
                     <div className="bg-stone-100">
                       <img
-                        src={post.imageDataUrl}
+                        src={post.image_url}
                         alt={post.description || "Uploaded photo"}
                         className="w-full max-h-[520px] object-contain bg-white"
                       />
